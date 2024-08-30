@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "api"
+version = "0.1.0"
+description = "MirrorWeb's tech test for Python Web Stack Roles"
+authors = ["mijho <mark.johnson@mirrorweb.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+bcrypt = "^4.2.0"
+fastapi = {extras = ["standard"], version = "^0.112.2"}
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
