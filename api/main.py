@@ -1,3 +1,4 @@
+import datetime
 from fastapi import FastAPI, HTTPException, Request, Response, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -9,6 +10,7 @@ import time
 import uvicorn
 import asyncio
 import random
+import pytz
 
 app = FastAPI()
 
@@ -95,14 +97,26 @@ async def logout(request: Request, response: Response, db: sqlite3.Connection = 
     return JSONResponse(content={"message": "Logged out"})
 
 @app.get("/messages")
-async def get_messages(request: Request, db: sqlite3.Connection = Depends(get_db)):
+async def get_messages(request: Request, db: sqlite3.Connection = Depends(get_db), page: int = 1, page_size: int = 10 ):
     session_id = get_cookie(request, 'comms_auth')
     if not session_id:
         raise HTTPException(status_code=401, detail="Unauthenticated")
     session, user = validate_session(db, session_id)
     if not session or not user:
         raise HTTPException(status_code=401, detail="Unauthenticated")
-    order = request.query_params.get("order", "asc")
+    
+    # Validate page and page_sizes values
+    if page < 1 or page_size < 1:
+        raise HTTPException(status_code=400, detail= "Page and page size must be greater than zero")
+    
+
+    order = request.query_params.get("order", "asc").upper()
+    if order not in ["ASC", "DESC"]:
+        raise HTTPException(status_code=400, detail="Invalid order value")
+    
+     # Calculate the offset for pagination
+    offset = (page - 1) * page_size
+
     cursor = db.cursor()
     cursor.execute(
         f"""
@@ -115,9 +129,9 @@ async def get_messages(request: Request, db: sqlite3.Connection = Depends(get_db
             identity from_identity ON m."from" = from_identity.id
         JOIN
             identity to_identity ON m."to" = to_identity.id
-        ORDER BY m.created_at {order.upper()}
-        LIMIT 10
-        """
+        ORDER BY m.created_at {order}
+        LIMIT ? OFFSET ?
+        """, (page_size, offset)
     )
     messages = cursor.fetchall()
     formatted_messages = [
@@ -126,15 +140,43 @@ async def get_messages(request: Request, db: sqlite3.Connection = Depends(get_db
             "subject": message[1],
             "content": message[2],
             "status": message[3],
-            "created_at": message[4],
+            "created_at": time_ago(message[4]),
             "from_email": message[5],
             "to_email": message[6]
         }
         for message in messages
     ]
-    
-    return JSONResponse(formatted_messages)
 
+    # Calculate the total number of messages for pagination metadata
+    cursor.execute("SELECT COUNT(*) FROM message")
+    total_messages = cursor.fetchone()[0]
+    total_pages = (total_messages // page_size) + (1 if total_messages % page_size > 0 else 0)
+    
+    return JSONResponse({
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+        "total_messages": total_messages,
+        "messages": formatted_messages
+    })
+
+def time_ago(timestamp):
+    now = datetime.utcnow()
+    timestamp = datetime.utcfromtimestamp(timestamp)
+    delta = now - timestamp
+
+    if delta < datetime.timedelta(minutes=1):
+        return "Just now"
+    elif delta < datetime.timedelta(hours=1):
+        minutes = int(delta.total_seconds() // 60)
+        return f"{minutes} minutes ago"
+    elif delta < datetime.timedelta(days=1):
+        hours = int(delta.total_seconds() // 3600)
+        return f"{hours} hours ago"
+    else:
+        days = int(delta.total_seconds() // 86400)
+        return f"{days} days ago"
+    
 @app.get("/messages/{id}")
 async def get_message(id: str, request: Request, db: sqlite3.Connection = Depends(get_db)):
     session_id = get_cookie(request, 'comms_auth')
@@ -190,7 +232,7 @@ async def update_message(id: int, request: Request, db: sqlite3.Connection = Dep
     cursor = db.cursor()
     cursor.execute("UPDATE message SET status = ? WHERE id = ?", (status, id))
     db.commit()
-    return JSONResponse(content={"message": "Message updated"})
+    return JSONResponse(content={"message": "Message updated", "new_status": status})
 
 @app.get("/search")
 async def search_messages(request: Request, db: sqlite3.Connection = Depends(get_db)):
@@ -237,6 +279,7 @@ async def search_messages(request: Request, db: sqlite3.Connection = Depends(get
     
     return JSONResponse(formatted_messages)
 
+
 @app.get("/stats/total-messages")
 async def total_messages(request: Request, db: sqlite3.Connection = Depends(get_db)):
     await asyncio.sleep(random.uniform(0, 4))
@@ -246,24 +289,30 @@ async def total_messages(request: Request, db: sqlite3.Connection = Depends(get_
     session, user = validate_session(db, session_id)
     if not session or not user:
         raise HTTPException(status_code=401, detail="Unauthenticated")
-    cursor = db.cursor()
-    cursor.execute(
-        """
-        SELECT COUNT(*) as total FROM message
-        WHERE created_at >= ? AND created_at < ?
-        """,
-        (int(time.mktime(time.strptime("2024-06-01", "%Y-%m-%d"))), int(time.mktime(time.strptime("2024-07-01", "%Y-%m-%d"))))
-    )
-    current_month = cursor.fetchone()
-    cursor.execute(
-        """
-        SELECT COUNT(*) as total FROM message
-        WHERE created_at >= ? AND created_at < ?
-        """,
-        (int(time.mktime(time.strptime("2024-05-01", "%Y-%m-%d"))), int(time.mktime(time.strptime("2024-06-01", "%Y-%m-%d"))))
-    )
-    previous_month = cursor.fetchone()
-    return JSONResponse(content={"currentMonth": current_month[0], "previousMonth": previous_month[0]})
+    now = datetime.now(pytz.UTC)
+    current_month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    previous_month_start = (current_month_start - datetime.timedelta(days=1)).replace(day=1)
+    
+    current_month_start_ts = int(current_month_start.timestamp())
+    previous_month_start_ts = int(previous_month_start.timestamp())
+    current_month_end_ts = int((current_month_start + datetime.timedelta(days=31)).timestamp())
+
+    try:
+        cursor = db.cursor()
+        cursor.execute(
+            """
+            SELECT 
+                SUM(CASE WHEN created_at >= ? AND created_at < ? THEN 1 ELSE 0 END) AS current_month,
+                SUM(CASE WHEN created_at >= ? AND created_at < ? THEN 1 ELSE 0 END) AS previous_month
+            FROM message
+            """,
+            (current_month_start_ts, current_month_end_ts, previous_month_start_ts, current_month_start_ts)
+        )
+        result = cursor.fetchone()
+        return JSONResponse(content={"currentMonth": result[0], "previousMonth": result[1]})
+    
+    except sqlite3.Error as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 @app.get("/stats/total-message-actions")
 async def total_message_actions(request: Request, db: sqlite3.Connection = Depends(get_db)):
@@ -273,24 +322,30 @@ async def total_message_actions(request: Request, db: sqlite3.Connection = Depen
     session, user = validate_session(db, session_id)
     if not session or not user:
         raise HTTPException(status_code=401, detail="Unauthenticated")
-    cursor = db.cursor()
-    cursor.execute(
-        """
-        SELECT COUNT(*) as total FROM message
-        WHERE created_at >= ? AND created_at < ? AND status IS NOT NULL
-        """,
-        (int(time.mktime(time.strptime("2024-06-01", "%Y-%m-%d"))), int(time.mktime(time.strptime("2024-07-01", "%Y-%m-%d"))))
-    )
-    current_month = cursor.fetchone()
-    cursor.execute(
-        """
-        SELECT COUNT(*) as total FROM message
-        WHERE created_at >= ? AND created_at < ? AND status IS NOT NULL
-        """,
-        (int(time.mktime(time.strptime("2024-05-01", "%Y-%m-%d"))), int(time.mktime(time.strptime("2024-06-01", "%Y-%m-%d"))))
-    )
-    previous_month = cursor.fetchone()
-    return JSONResponse(content={"currentMonth": current_month[0], "previousMonth": previous_month[0]})
+    now = datetime.utcnow()
+    current_month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    previous_month_start = (current_month_start - datetime.timedelta(days=1)).replace(day=1)
+    
+    current_month_start_ts = int(current_month_start.timestamp())
+    previous_month_start_ts = int(previous_month_start.timestamp())
+    current_month_end_ts = int((current_month_start + datetime.timedelta(days=31)).timestamp())
+
+    try:
+        async with db.cursor() as cursor:
+            await cursor.execute(
+                """
+                SELECT
+                    SUM(CASE WHEN created_at >= ? AND created_at < ? AND status IS NOT NULL THEN 1 ELSE 0 END) AS current_month,
+                    SUM(CASE WHEN created_at >= ? AND created_at < ? AND status IS NOT NULL THEN 1 ELSE 0 END) AS previous_month
+                FROM message
+                """,
+                (current_month_start_ts, current_month_end_ts, previous_month_start_ts, current_month_start_ts)
+            )
+            result = await cursor.fetchone()
+            return JSONResponse(content={"currentMonth": result[0], "previousMonth": result[1]})
+    
+    except aiosqlite.Error as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=True)
