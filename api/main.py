@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, Request, Response, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from datetime import datetime
 import sqlite3
 from typing import Optional
 from auth import validate_session, create_session, delete_session, verify_password
@@ -36,6 +37,18 @@ def get_cookie(request: Request, name: str) -> Optional[str]:
 def set_cookie(response: Response, name: str, value: str, max_age: int = None):
     response.set_cookie(key=name, value=value, domain='localhost', httponly=False, max_age=3600, samesite='lax')
 
+def time_since_created(created_at: int):
+    now = datetime.now()
+    target_time = datetime.fromtimestamp(created_at)
+
+    difference = now - target_time
+    days = difference.days
+    seconds = difference.seconds
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+
+    return f"{days}d {hours}h {minutes}m"
+
 # Models
 class User(BaseModel):
     id: int
@@ -48,6 +61,7 @@ class Message(BaseModel):
     content: str
     status: Optional[str]
     created_at: int
+    time_since_created_str: str
     from_email: str
     to_email: str
 
@@ -127,6 +141,7 @@ async def get_messages(request: Request, db: sqlite3.Connection = Depends(get_db
             "content": message[2],
             "status": message[3],
             "created_at": message[4],
+            "time_since_created_str": time_since_created(message[4]),
             "from_email": message[5],
             "to_email": message[6]
         }
@@ -169,6 +184,7 @@ async def get_message(id: str, request: Request, db: sqlite3.Connection = Depend
         "content": message[2],
         "status": message[3],
         "created_at": message[4],
+        "time_since_created_str": time_since_created(message[4]),
         "from_email": message[5],
         "to_email": message[6]
     }
@@ -176,7 +192,7 @@ async def get_message(id: str, request: Request, db: sqlite3.Connection = Depend
     return JSONResponse(message_dict)
 
 @app.put("/messages/{id}")
-async def update_message(id: int, request: Request, db: sqlite3.Connection = Depends(get_db)):
+async def update_message(id: str, request: Request, db: sqlite3.Connection = Depends(get_db)):
     session_id = get_cookie(request, 'comms_auth')
     if not session_id:
         raise HTTPException(status_code=401, detail="Unauthenticated")
@@ -229,6 +245,7 @@ async def search_messages(request: Request, db: sqlite3.Connection = Depends(get
             "content": message[2],
             "status": message[3],
             "created_at": message[4],
+            "time_since_created_str": time_since_created(message[4]),
             "from_email": message[5],
             "to_email": message[6]
         }

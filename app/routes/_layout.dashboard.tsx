@@ -8,9 +8,27 @@ import { api, API_URL, classNames } from '~/lib/utils'
 export async function loader({ request }: LoaderFunctionArgs) {
   const { session } = await requireSession(request)
 
+  const getTotalMessages = async () => {
+    try {
+      return await api('/stats/total-messages', { headers: { cookie: session } })
+    } catch (error) {
+      console.log('Error getting total messages: ', error)
+      return JSON.parse('{"currentMonth": "error", "previousMonth": "error"}')
+    }
+  }
+
+  const getTotalMessageActions = async () => {
+    try {
+      return await api('/stats/total-message-actions', { headers: { cookie: session } })
+    } catch (error) {
+      console.log('Error getting total message actions: ', error)
+      return JSON.parse('{"currentMonth": "error", "previousMonth": "error"}')
+    }
+  }
+
   const [totalMessages, totalActions] = await Promise.all([
-    api('/stats/total-messages', { headers: { cookie: session } }),
-    api('/stats/total-message-actions', { headers: { cookie: session } }),
+    getTotalMessages(),
+    getTotalMessageActions(),
   ])
 
   return json({ totalMessages, totalActions })
@@ -57,7 +75,7 @@ export default function Dashboard() {
 }
 
 function StatsTotalCard({ name, currentMonth, previousMonth }: any) {
-  const change = ((currentMonth - previousMonth) / previousMonth) * 100
+  const change = parseFloat((((currentMonth - previousMonth) / previousMonth) * 100).toFixed(2))
   const changeType = change > 0 ? 'increase' : 'decrease'
 
   return (
@@ -100,7 +118,7 @@ function MessageList() {
   const [messages, setMessages] = useState([])
 
   useEffect(() => {
-    fetch(API_URL + '/messages', {
+    fetch(API_URL + '/messages?order=desc', {
       credentials: 'include',
     })
       .then((res) => res.json())
@@ -138,7 +156,7 @@ function MessageList() {
             <div className='flex shrink-0 items-center gap-x-4'>
               <div className='hidden sm:flex sm:flex-col sm:items-end'>
                 <p className='text-xs leading-5 text-gray-500'>
-                  {new Date(message.created_at * 1000).toLocaleString()}
+                  Created {message.time_since_created_str} ago
                 </p>
               </div>
             </div>
