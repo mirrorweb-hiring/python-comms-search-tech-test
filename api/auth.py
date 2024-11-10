@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import secrets
 import bcrypt
 import sqlite3
@@ -10,7 +10,7 @@ def verify_password(password_hash: str, password: str) -> bool:
 
 def create_session(db: sqlite3.Connection, user_id: int):
     session_id = secrets.token_hex(16)
-    expires_at = datetime.now() + timedelta(days=7)  # 1 week
+    expires_at = datetime.now(timezone.utc) + timedelta(days=7)  # 1 week
     cursor = db.cursor()
     cursor.execute(
         'INSERT INTO session (id, user_id, expires_at) VALUES (?, ?, ?)',
@@ -45,7 +45,7 @@ def get_session(db: sqlite3.Connection, session_id: str):
     return {
         'id': result[0],
         'user_id': result[1],
-        'expires_at': datetime.fromtimestamp(result[2]),
+        'expires_at': datetime.fromtimestamp(result[2], tz=timezone.utc),
     }
 
 def delete_session(db: sqlite3.Connection, session_id: str):
@@ -70,7 +70,7 @@ def get_user_from_session(db: sqlite3.Connection, session_id: str):
         'id': result[0],
         'email': result[1],
         'password_hash': result[2],
-        'created_at': datetime.fromtimestamp(result[3]),
+        'created_at': datetime.fromtimestamp(result[3], tz=timezone.utc),
     }
 
 def get_user_by_email(db: sqlite3.Connection, email: str):
@@ -83,8 +83,8 @@ def get_user_by_email(db: sqlite3.Connection, email: str):
         'id': result[0],
         'email': result[1],
         'password_hash': result[2],
-        'created_at': datetime.fromtimestamp(result[3]),
+        'created_at': datetime.fromtimestamp(result[3], tz=timezone.utc),
     }
 
 def is_session_expired(expires_at: datetime) -> bool:
-    return expires_at < datetime.now()
+    return expires_at < datetime.now(timezone.utc)

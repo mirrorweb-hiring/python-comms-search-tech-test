@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, Request, Response, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 import sqlite3
 from typing import Optional
 from auth import validate_session, create_session, delete_session, verify_password
@@ -72,15 +72,19 @@ async def get_me(request: Request, db: sqlite3.Connection = Depends(get_db)):
 @app.post("/login")
 async def login(request: Request, response: Response, db: sqlite3.Connection = Depends(get_db)):
     data = await request.json()
-    email = data.get("email")
-    password = data.get("password")
-    if not email or not password:
+
+    try:
+        login_request = LoginRequest.model_validate(data)
+    except ValidationError:
         raise HTTPException(status_code=400, detail="Bad Request")
+
     cursor = db.cursor()
-    cursor.execute(f"SELECT * FROM user WHERE email = '{email}'")
+    cursor.execute("SELECT * FROM user WHERE email = ?", (login_request.email,))
     user = cursor.fetchone()
-    if not user or not verify_password(user[3], password):
+
+    if not user or not verify_password(user[3], login_request.password):
         raise HTTPException(status_code=400, detail="Invalid email or password")
+
     session_id = create_session(db, user[0])
     set_cookie(response, 'comms_auth', session_id)
     return True
@@ -103,6 +107,14 @@ async def get_messages(request: Request, db: sqlite3.Connection = Depends(get_db
     if not session or not user:
         raise HTTPException(status_code=401, detail="Unauthenticated")
     order = request.query_params.get("order", "asc")
+
+    try:
+        page_size = int(request.query_params.get("page_size", 10))
+        page = int(request.query_params.get("page", 1))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="page and page_numbers should be integers.")
+
+
     cursor = db.cursor()
     cursor.execute(
         f"""
@@ -116,10 +128,15 @@ async def get_messages(request: Request, db: sqlite3.Connection = Depends(get_db
         JOIN
             identity to_identity ON m."to" = to_identity.id
         ORDER BY m.created_at {order.upper()}
-        LIMIT 10
+        LIMIT {page_size}
+        OFFSET {(page-1)*page_size}
         """
     )
     messages = cursor.fetchall()
+
+    if page > 1 and len(messages) == 0:
+        raise HTTPException(status_code=400, detail="page is out of range")
+
     formatted_messages = [
         {
             "id": message[0],
@@ -132,7 +149,7 @@ async def get_messages(request: Request, db: sqlite3.Connection = Depends(get_db
         }
         for message in messages
     ]
-    
+
     return JSONResponse(formatted_messages)
 
 @app.get("/messages/{id}")
@@ -162,7 +179,7 @@ async def get_message(id: str, request: Request, db: sqlite3.Connection = Depend
     message = cursor.fetchone()
     if not message:
         raise HTTPException(status_code=404, detail="Message not found")
-    
+
     message_dict = {
         "id": message[0],
         "subject": message[1],
@@ -293,4 +310,4 @@ async def total_message_actions(request: Request, db: sqlite3.Connection = Depen
     return JSONResponse(content={"currentMonth": current_month[0], "previousMonth": previous_month[0]})
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=True)
+    uvicorn.run("main:app", host="localhost", port=8080, reload=True)
