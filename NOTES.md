@@ -28,7 +28,6 @@ I use Windows 11 as my primary OS at home. As such, installing `better-sqlite3` 
 - Updated expiry timestamp generation to use timezone-aware timestamps, specifically, UTC timestamps.
   - Reasoning is identical to [create-user](#create_session).
 
-
 ## main.py
 
 ### Cookies
@@ -57,3 +56,12 @@ I use Windows 11 as my primary OS at home. As such, installing `better-sqlite3` 
 -  This is a fairly simple form of Pagination. For this context, this pagination scheme is ok, as the number of records is quite small. However, in a system of thousands and millions of records, this pagination technique may be too simple, and can cause bottlenecks on the database, as its reading ALL availiable data, and stepping through each record in the OFFSET one at a time. To fix this, a cursor method of pagination may be more appropriate as we can skip right to the next record needed, reducing the work needed on the database engine. 
 
 
+## Task 4 Notes
+
+- Part of this solution is covered above - ensure all datetimes returned by the API are implemented in the UTC timezone. This simplifies the logic for the rest of the system. I would also want to output all Dates in ISO8601 format to preserve the timezone accross the boundaries, and parse them into a JS `Date` object.
+- To convert the datetimes into a human readable entry I would first identify the current time, using JS' `Date.now()` constructor. Ideally, I'd get this only once and use it for the whole list. I loose some accuracy, but gain a bit of speed by not having to generate it every time.
+- I would then want to find the difference between the two. This will result in the number of seconds between when the message was made, and now.
+- I'd divide by 60, giving me the number of minutes. If the number of minutes is less than 0, then it'll result in the `seconds ago` suffix added to the end of the total seconds. 
+- If the number of minutes is over 60, I'll divide by 60 again. This gives me the number of hours. If this is less than 0, then I'll return the `minutes ago` suffix to the end of the number of minutes.
+- If the number is over 24, I'll divide by 24. This gives the number of days. If the number is less than 0, then it'll result in the `hours ago` suffix added to the end of the number of hours.
+- If the number is over 7, I'll result in the `more than {x} days ago` text. Otherwise, the `days ago` suffix will be added.
